@@ -386,7 +386,7 @@
       .join('\n');
   }
 
-  function showNotification(message, type = 'info', duration = 3000) {
+  function showNotification(message, type = 'info', duration = 3000, linkUrl = null) {
     if (!document.getElementById('scrapbox-clip-notification-style')) {
       const style = document.createElement('style');
       style.id = 'scrapbox-clip-notification-style';
@@ -421,8 +421,17 @@
       box-shadow: 0 2px 10px rgba(0,0,0,0.3);
       animation: scrapbox-clip-slideIn 0.3s ease;
       max-width: 300px;
+      ${linkUrl ? 'cursor: pointer;' : ''}
     `;
     notification.textContent = message;
+
+    if (linkUrl) {
+      notification.title = 'Click to open page';
+      notification.addEventListener('click', () => {
+        GM_openInTab(linkUrl, { active: true });
+        notification.remove();
+      });
+    }
 
     document.body.appendChild(notification);
 
@@ -469,11 +478,13 @@
       // Import page via API
       await importPageToScrapbox(project, pageTitle, lines);
 
-      showNotification(`Saved to ${project}!`, 'success');
+      const savedPageUrl = `https://scrapbox.io/${encodeURIComponent(project)}/${encodeURIComponent(pageTitle)}`;
 
       if (autoOpen) {
-        const pageUrl = `https://scrapbox.io/${encodeURIComponent(project)}/${encodeURIComponent(pageTitle)}`;
-        GM_openInTab(pageUrl, { active: true });
+        GM_openInTab(savedPageUrl, { active: true });
+        showNotification(`Saved to ${project}!`, 'success');
+      } else {
+        showNotification(`Saved to ${project}! (Click to open)`, 'success', 8000, savedPageUrl);
       }
     } catch (error) {
       console.error('Scrapbox Clip Error:', error);
@@ -505,9 +516,7 @@
     if (autoOpen) {
       GM_openInTab(scrapboxUrl, { active: true });
     } else {
-      navigator.clipboard.writeText(scrapboxUrl).then(() => {
-        showNotification('Scrapbox URL copied to clipboard!', 'success');
-      });
+      showNotification('Click to open Scrapbox page', 'info', 8000, scrapboxUrl);
     }
   }
 
