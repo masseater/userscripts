@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Scrapbox Clip - Save to Scrapbox
 // @namespace    https://github.com/your-username/scrapbox-clip
-// @version      1.0.0
+// @version      1.0.1
 // @description  Save current page title, URL, and selected text to Scrapbox
 // @author       You
 // @match        *://*/*
@@ -200,6 +200,7 @@
     function closeDialog() {
       dialog.remove();
       overlay.remove();
+      document.removeEventListener('keydown', escapeHandler);
     }
   }
 
@@ -231,6 +232,19 @@
   }
 
   function showNotification(message, duration = 3000) {
+    // Add animation keyframes only once
+    if (!document.getElementById('scrapbox-clip-notification-style')) {
+      const style = document.createElement('style');
+      style.id = 'scrapbox-clip-notification-style';
+      style.textContent = `
+        @keyframes scrapbox-clip-slideIn {
+          from { transform: translateX(100%); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `;
+      document.head.appendChild(style);
+    }
+
     const notification = document.createElement('div');
     notification.style.cssText = `
       position: fixed;
@@ -244,27 +258,16 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 14px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.3);
-      animation: slideIn 0.3s ease;
+      animation: scrapbox-clip-slideIn 0.3s ease;
     `;
     notification.textContent = message;
-
-    // Add animation keyframes
-    const style = document.createElement('style');
-    style.textContent = `
-      @keyframes slideIn {
-        from { transform: translateX(100%); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
-      }
-    `;
-    document.head.appendChild(style);
 
     document.body.appendChild(notification);
 
     setTimeout(() => {
-      notification.style.animation = 'slideIn 0.3s ease reverse';
+      notification.style.animation = 'scrapbox-clip-slideIn 0.3s ease reverse';
       setTimeout(() => {
         notification.remove();
-        style.remove();
       }, 300);
     }, duration);
   }
@@ -299,8 +302,8 @@
     const body = encodeURIComponent(lines.join('\n'));
     const encodedTitle = encodeURIComponent(pageTitle);
 
-    // Create Scrapbox URL
-    const scrapboxUrl = `https://scrapbox.io/${project}/${encodedTitle}?body=${body}`;
+    // Create Scrapbox URL (encode project name for special characters)
+    const scrapboxUrl = `https://scrapbox.io/${encodeURIComponent(project)}/${encodedTitle}?body=${body}`;
 
     if (autoOpen) {
       GM_openInTab(scrapboxUrl, { active: true });
@@ -373,8 +376,14 @@
 
     let currentSelection = '';
 
-    // Show custom context menu on right-click when text is selected
+    // Show custom context menu on Alt+right-click when text is selected
+    // (Alt key prevents blocking native context menu)
     document.addEventListener('contextmenu', (e) => {
+      // Only show custom menu when Alt key is pressed
+      if (!e.altKey) {
+        return;
+      }
+
       const selection = window.getSelection();
       const selectedText = selection.toString().trim();
 
