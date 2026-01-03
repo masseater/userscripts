@@ -92,33 +92,29 @@
    */
   function importPageToScrapbox(project, title, lines) {
     return new Promise((resolve, reject) => {
-      const importData = {
+      const importData = JSON.stringify({
         pages: [
           {
             title: title,
             lines: lines,
           },
         ],
-      };
-
-      const headers = {
-        'Content-Type': 'application/json;charset=utf-8',
-      };
-      if (csrfToken) {
-        headers['X-CSRF-TOKEN'] = csrfToken;
-      }
-
-      console.log('Scrapbox Import Request:', {
-        url: `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`,
-        headers: headers,
-        data: importData,
       });
+
+      // Create a Blob to simulate file upload
+      const blob = new Blob([importData], { type: 'application/json' });
+      const formData = new FormData();
+      formData.append('import-file', blob, 'import.json');
+
+      const url = `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`;
+
+      console.log('Scrapbox Import Request:', { url, title, lines });
 
       GM_xmlhttpRequest({
         method: 'POST',
-        url: `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`,
-        headers: headers,
-        data: JSON.stringify(importData),
+        url: url,
+        headers: csrfToken ? { 'X-CSRF-TOKEN': csrfToken } : {},
+        data: formData,
         anonymous: false,
         onload: (response) => {
           console.log('Scrapbox Import Response:', response.status, response.responseText);
@@ -127,7 +123,6 @@
               const result = JSON.parse(response.responseText);
               resolve(result);
             } catch {
-              // Some success responses may not be JSON
               resolve({ success: true });
             }
           } else if (response.status === 401 || response.status === 403) {
