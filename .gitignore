@@ -1,0 +1,8 @@
+node_modules/
+*.log
+.DS_Store
+.turbo/
+
+# Ignore JS files except in dist/
+*.js
+!dist/**/*.js

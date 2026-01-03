@@ -1,0 +1,19 @@
+{
+  "name": "scrapbox-clip",
+  "version": "0.0.1",
+  "devDependencies": {
+    "vite": "^6",
+    "vite-plugin-monkey": "^5"
+  },
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "type": "module",
+  "dependencies": {
+    "@cosense/std": "^0.31.0",
+    "@cosense/types": "^0.11.7",
+    "option-t": "^55.1.0"
+  }
+}
