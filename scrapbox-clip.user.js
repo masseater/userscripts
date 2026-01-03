@@ -90,54 +90,59 @@
    * Import pages to Scrapbox project
    * Uses the import API to create/update pages
    */
-  async function importPageToScrapbox(project, title, lines) {
-    const importData = JSON.stringify({
-      pages: [
-        {
-          title: title,
-          lines: lines,
-        },
-      ],
-    });
+  function importPageToScrapbox(project, title, lines) {
+    return new Promise((resolve, reject) => {
+      const importData = JSON.stringify({
+        pages: [
+          {
+            title: title,
+            lines: lines,
+          },
+        ],
+      });
 
-    // Create FormData with file upload (must use application/octet-stream)
-    const blob = new Blob([importData], { type: 'application/octet-stream' });
-    const formData = new FormData();
-    formData.append('import-file', blob, 'import.json');
-    formData.append('name', 'undefined');
+      // Create FormData with file upload (must use application/octet-stream)
+      const blob = new Blob([importData], { type: 'application/octet-stream' });
+      const formData = new FormData();
+      formData.append('import-file', blob, 'import.json');
+      formData.append('name', 'undefined');
 
-    const url = `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`;
+      const url = `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`;
 
-    console.log('Scrapbox Import Request:', { url, title, lines });
+      console.log('Scrapbox Import Request:', { url, title, lines });
 
-    const headers = {
-      Accept: 'application/json, text/plain, */*',
-    };
-    if (csrfToken) {
-      headers['X-CSRF-TOKEN'] = csrfToken;
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: headers,
-      body: formData,
-      credentials: 'include',
-    });
-
-    console.log('Scrapbox Import Response:', response.status);
-
-    if (response.ok) {
-      try {
-        return await response.json();
-      } catch {
-        return { success: true };
+      // DO NOT set Content-Type header - browser will set it with correct boundary
+      const headers = {};
+      if (csrfToken) {
+        headers['X-CSRF-TOKEN'] = csrfToken;
       }
-    } else if (response.status === 401 || response.status === 403) {
-      throw new Error('Not authorized. Please login to Scrapbox first.');
-    } else {
-      const text = await response.text();
-      throw new Error(`API Error: HTTP ${response.status} - ${text}`);
-    }
+
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: url,
+        headers: headers,
+        data: formData,
+        anonymous: false,
+        onload: (response) => {
+          console.log('Scrapbox Import Response:', response.status, response.responseText);
+          if (response.status === 200) {
+            try {
+              const result = JSON.parse(response.responseText);
+              resolve(result);
+            } catch {
+              resolve({ success: true });
+            }
+          } else if (response.status === 401 || response.status === 403) {
+            reject(new Error('Not authorized. Please login to Scrapbox first.'));
+          } else {
+            reject(new Error(`API Error: HTTP ${response.status} - ${response.responseText}`));
+          }
+        },
+        onerror: () => {
+          reject(new Error('Network error. Please check your connection.'));
+        },
+      });
+    });
   }
 
   /**
