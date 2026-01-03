@@ -1,14 +1,16 @@
 // ==UserScript==
 // @name         Scrapbox Clip - Save to Scrapbox
 // @namespace    https://github.com/your-username/scrapbox-clip
-// @version      1.0.1
-// @description  Save current page title, URL, and selected text to Scrapbox
+// @version      2.0.0
+// @description  Save current page title, URL, and selected text to Scrapbox via API
 // @author       You
 // @match        *://*/*
 // @grant        GM_setValue
 // @grant        GM_getValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_openInTab
+// @grant        GM_xmlhttpRequest
+// @connect      scrapbox.io
 // @license      MIT
 // @homepageURL  https://github.com/your-username/scrapbox-clip
 // @supportURL   https://github.com/your-username/scrapbox-clip/issues
@@ -30,6 +32,8 @@
     [CONFIG_KEYS.AUTO_OPEN]: true,
   };
 
+  const SCRAPBOX_API_BASE = 'https://scrapbox.io/api';
+
   // ========================================
   // Config Management
   // ========================================
@@ -42,10 +46,109 @@
   }
 
   // ========================================
+  // Scrapbox API Functions
+  // ========================================
+
+  /**
+   * Check if user is logged into Scrapbox
+   */
+  function checkScrapboxLogin() {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `${SCRAPBOX_API_BASE}/users/me`,
+        withCredentials: true,
+        onload: (response) => {
+          if (response.status === 200) {
+            try {
+              const user = JSON.parse(response.responseText);
+              if (user && user.id) {
+                resolve(user);
+              } else {
+                reject(new Error('Not logged in'));
+              }
+            } catch {
+              reject(new Error('Invalid response'));
+            }
+          } else {
+            reject(new Error(`HTTP ${response.status}`));
+          }
+        },
+        onerror: (error) => {
+          reject(new Error('Network error'));
+        },
+      });
+    });
+  }
+
+  /**
+   * Import pages to Scrapbox project
+   * Uses the import API to create/update pages
+   */
+  function importPageToScrapbox(project, title, lines) {
+    return new Promise((resolve, reject) => {
+      const importData = {
+        pages: [
+          {
+            title: title,
+            lines: lines,
+          },
+        ],
+      };
+
+      GM_xmlhttpRequest({
+        method: 'POST',
+        url: `${SCRAPBOX_API_BASE}/page-data/import/${encodeURIComponent(project)}.json`,
+        headers: {
+          'Content-Type': 'application/json;charset=utf-8',
+        },
+        data: JSON.stringify(importData),
+        withCredentials: true,
+        onload: (response) => {
+          if (response.status === 200) {
+            try {
+              const result = JSON.parse(response.responseText);
+              resolve(result);
+            } catch {
+              // Some success responses may not be JSON
+              resolve({ success: true });
+            }
+          } else if (response.status === 401 || response.status === 403) {
+            reject(new Error('Not authorized. Please login to Scrapbox first.'));
+          } else {
+            reject(new Error(`API Error: HTTP ${response.status}`));
+          }
+        },
+        onerror: () => {
+          reject(new Error('Network error. Please check your connection.'));
+        },
+      });
+    });
+  }
+
+  /**
+   * Check if page exists in project
+   */
+  function checkPageExists(project, title) {
+    return new Promise((resolve) => {
+      GM_xmlhttpRequest({
+        method: 'GET',
+        url: `${SCRAPBOX_API_BASE}/pages/${encodeURIComponent(project)}/${encodeURIComponent(title)}`,
+        withCredentials: true,
+        onload: (response) => {
+          resolve(response.status === 200);
+        },
+        onerror: () => {
+          resolve(false);
+        },
+      });
+    });
+  }
+
+  // ========================================
   // Settings Dialog
   // ========================================
   function showSettingsDialog() {
-    // Remove existing dialog if present
     const existingDialog = document.getElementById('scrapbox-clip-settings');
     if (existingDialog) {
       existingDialog.remove();
@@ -138,6 +241,31 @@
         #scrapbox-clip-settings .cancel-btn:hover {
           background: #d0d0d0;
         }
+        #scrapbox-clip-settings .test-btn {
+          background: #4caf50;
+          color: white;
+          margin-right: auto;
+        }
+        #scrapbox-clip-settings .test-btn:hover {
+          background: #43a047;
+        }
+        #scrapbox-clip-settings .status {
+          margin-top: 12px;
+          padding: 8px;
+          border-radius: 4px;
+          font-size: 13px;
+          display: none;
+        }
+        #scrapbox-clip-settings .status.success {
+          background: #e8f5e9;
+          color: #2e7d32;
+          display: block;
+        }
+        #scrapbox-clip-settings .status.error {
+          background: #ffebee;
+          color: #c62828;
+          display: block;
+        }
         #scrapbox-clip-overlay {
           position: fixed;
           top: 0;
@@ -157,7 +285,9 @@
         <input type="checkbox" id="scrapbox-clip-auto-open" ${currentAutoOpen ? 'checked' : ''}>
         Automatically open the created page
       </label>
+      <div id="scrapbox-clip-status" class="status"></div>
       <div class="buttons">
+        <button class="test-btn" id="scrapbox-clip-test">Test Connection</button>
         <button class="cancel-btn" id="scrapbox-clip-cancel">Cancel</button>
         <button class="save-btn" id="scrapbox-clip-save">Save</button>
       </div>
@@ -169,7 +299,27 @@
     document.body.appendChild(overlay);
     document.body.appendChild(dialog);
 
-    // Event listeners
+    const statusEl = document.getElementById('scrapbox-clip-status');
+
+    // Test connection
+    document.getElementById('scrapbox-clip-test').addEventListener('click', async () => {
+      statusEl.className = 'status';
+      statusEl.textContent = 'Testing...';
+      statusEl.style.display = 'block';
+      statusEl.style.background = '#fff3e0';
+      statusEl.style.color = '#e65100';
+
+      try {
+        const user = await checkScrapboxLogin();
+        statusEl.className = 'status success';
+        statusEl.textContent = `Connected as: ${user.displayName || user.name}`;
+      } catch (error) {
+        statusEl.className = 'status error';
+        statusEl.textContent = `Not logged in. Please login to scrapbox.io first.`;
+      }
+    });
+
+    // Save settings
     document.getElementById('scrapbox-clip-save').addEventListener('click', () => {
       const project = document.getElementById('scrapbox-clip-project').value.trim();
       const autoOpen = document.getElementById('scrapbox-clip-auto-open').checked;
@@ -188,11 +338,9 @@
     document.getElementById('scrapbox-clip-cancel').addEventListener('click', closeDialog);
     overlay.addEventListener('click', closeDialog);
 
-    // Close on Escape key
     const escapeHandler = (e) => {
       if (e.key === 'Escape') {
         closeDialog();
-        document.removeEventListener('keydown', escapeHandler);
       }
     };
     document.addEventListener('keydown', escapeHandler);
@@ -214,8 +362,6 @@
   }
 
   function escapeScrapboxTitle(title) {
-    // Scrapbox title cannot contain: / [ ] #
-    // Replace them with similar characters
     return title
       .replace(/\//g, '／')
       .replace(/\[/g, '［')
@@ -224,15 +370,13 @@
   }
 
   function formatTextForScrapbox(text) {
-    // Indent each line for quote block
     return text
       .split('\n')
-      .map(line => ' > ' + line)
+      .map((line) => ' > ' + line)
       .join('\n');
   }
 
-  function showNotification(message, duration = 3000) {
-    // Add animation keyframes only once
+  function showNotification(message, type = 'info', duration = 3000) {
     if (!document.getElementById('scrapbox-clip-notification-style')) {
       const style = document.createElement('style');
       style.id = 'scrapbox-clip-notification-style';
@@ -245,12 +389,19 @@
       document.head.appendChild(style);
     }
 
+    const colors = {
+      info: '#323232',
+      success: '#2e7d32',
+      error: '#c62828',
+      warning: '#f57c00',
+    };
+
     const notification = document.createElement('div');
     notification.style.cssText = `
       position: fixed;
       bottom: 20px;
       right: 20px;
-      background: #323232;
+      background: ${colors[type] || colors.info};
       color: white;
       padding: 12px 24px;
       border-radius: 4px;
@@ -259,6 +410,7 @@
       font-size: 14px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.3);
       animation: scrapbox-clip-slideIn 0.3s ease;
+      max-width: 300px;
     `;
     notification.textContent = message;
 
@@ -275,12 +427,14 @@
   // ========================================
   // Core Functionality
   // ========================================
-  function createScrapboxPage(selectedText = '') {
+  async function createScrapboxPage(selectedText = '') {
     const project = getConfig(CONFIG_KEYS.PROJECT);
     const autoOpen = getConfig(CONFIG_KEYS.AUTO_OPEN);
 
     if (!project || project === 'your-project') {
-      alert('Please configure your Scrapbox project first.\n\nClick the Tampermonkey/Greasemonkey icon and select "Scrapbox Clip Settings".');
+      alert(
+        'Please configure your Scrapbox project first.\n\nClick the Tampermonkey/Greasemonkey icon and select "Scrapbox Clip Settings".'
+      );
       showSettingsDialog();
       return;
     }
@@ -288,34 +442,63 @@
     const pageTitle = escapeScrapboxTitle(document.title);
     const pageUrl = location.href;
 
-    // Build page body
-    const lines = [];
-    lines.push(`[${pageUrl} ${pageTitle}]`);
-    lines.push('');
+    // Build page lines for Scrapbox
+    const lines = [pageTitle, `[${pageUrl} ${pageTitle}]`, ''];
 
     if (selectedText) {
-      lines.push(formatTextForScrapbox(selectedText));
-      lines.push('');
+      const quotedLines = formatTextForScrapbox(selectedText).split('\n');
+      lines.push(...quotedLines, '');
     }
 
-    // URL encode the body
+    showNotification('Saving to Scrapbox...', 'info', 10000);
+
+    try {
+      // Check login status
+      await checkScrapboxLogin();
+
+      // Import page via API
+      await importPageToScrapbox(project, pageTitle, lines);
+
+      showNotification(`Saved to ${project}!`, 'success');
+
+      if (autoOpen) {
+        const pageUrl = `https://scrapbox.io/${encodeURIComponent(project)}/${encodeURIComponent(pageTitle)}`;
+        GM_openInTab(pageUrl, { active: true });
+      }
+    } catch (error) {
+      console.error('Scrapbox Clip Error:', error);
+
+      if (error.message.includes('Not logged in') || error.message.includes('Not authorized')) {
+        showNotification('Please login to Scrapbox first!', 'error', 5000);
+        // Open Scrapbox login page
+        GM_openInTab('https://scrapbox.io/', { active: true });
+      } else {
+        // Fallback to URL method
+        showNotification('API failed, using URL fallback...', 'warning');
+        fallbackToUrlMethod(project, pageTitle, pageUrl, selectedText, autoOpen);
+      }
+    }
+  }
+
+  /**
+   * Fallback to URL-based page creation when API fails
+   */
+  function fallbackToUrlMethod(project, pageTitle, pageUrl, selectedText, autoOpen) {
+    const lines = [`[${pageUrl} ${pageTitle}]`, ''];
+
+    if (selectedText) {
+      lines.push(formatTextForScrapbox(selectedText), '');
+    }
+
     const body = encodeURIComponent(lines.join('\n'));
     const encodedTitle = encodeURIComponent(pageTitle);
-
-    // Create Scrapbox URL (encode project name for special characters)
     const scrapboxUrl = `https://scrapbox.io/${encodeURIComponent(project)}/${encodedTitle}?body=${body}`;
 
     if (autoOpen) {
       GM_openInTab(scrapboxUrl, { active: true });
-      showNotification(`Page created in ${project}`);
     } else {
-      // Copy URL to clipboard
       navigator.clipboard.writeText(scrapboxUrl).then(() => {
-        showNotification('Scrapbox URL copied to clipboard!');
-      }).catch(() => {
-        // Fallback: open in new tab anyway
-        GM_openInTab(scrapboxUrl, { active: false });
-        showNotification(`Page created in ${project} (background)`);
+        showNotification('Scrapbox URL copied to clipboard!', 'success');
       });
     }
   }
@@ -377,9 +560,7 @@
     let currentSelection = '';
 
     // Show custom context menu on Alt+right-click when text is selected
-    // (Alt key prevents blocking native context menu)
     document.addEventListener('contextmenu', (e) => {
-      // Only show custom menu when Alt key is pressed
       if (!e.altKey) {
         return;
       }
@@ -395,26 +576,22 @@
         menu.style.left = `${Math.min(e.clientX, window.innerWidth - 220)}px`;
         menu.style.top = `${Math.min(e.clientY, window.innerHeight - 100)}px`;
 
-        // Show selection option
         document.getElementById('scrapbox-clip-save-selection').style.display = 'flex';
       }
     });
 
-    // Hide menu on click outside
     document.addEventListener('click', (e) => {
       if (!menu.contains(e.target)) {
         menu.style.display = 'none';
       }
     });
 
-    // Hide menu on Escape
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         menu.style.display = 'none';
       }
     });
 
-    // Menu item click handlers
     document.getElementById('scrapbox-clip-save-selection').addEventListener('click', () => {
       menu.style.display = 'none';
       createScrapboxPage(currentSelection);
@@ -431,7 +608,6 @@
   // ========================================
   function setupKeyboardShortcut() {
     document.addEventListener('keydown', (e) => {
-      // Ctrl+Shift+S (or Cmd+Shift+S on Mac)
       if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'S') {
         e.preventDefault();
         const selectedText = window.getSelection().toString().trim();
@@ -450,6 +626,16 @@
 
   GM_registerMenuCommand('Scrapbox Clip Settings', showSettingsDialog);
 
+  GM_registerMenuCommand('Check Scrapbox Login', async () => {
+    try {
+      const user = await checkScrapboxLogin();
+      showNotification(`Logged in as: ${user.displayName || user.name}`, 'success');
+    } catch {
+      showNotification('Not logged in to Scrapbox', 'error');
+      GM_openInTab('https://scrapbox.io/', { active: true });
+    }
+  });
+
   // ========================================
   // Initialize
   // ========================================
@@ -458,7 +644,6 @@
     setupKeyboardShortcut();
   }
 
-  // Wait for DOM to be ready
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', init);
   } else {
